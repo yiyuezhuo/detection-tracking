@@ -1,0 +1,320 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri May 24 13:11:44 2019
+
+@author: yiyuezhuo
+"""
+
+import os
+import torch
+import cv2
+import time
+import numpy as np
+from scipy.ndimage import convolve
+
+from torch.utils.data import Dataset, DataLoader
+
+
+from data import BaseTransform
+from ssd import build_ssd
+
+from data import VOC_CLASSES
+labelmap = VOC_CLASSES
+
+use_cuda = True
+batch_size = 30
+
+if use_cuda and torch.cuda.is_available():
+    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+else:
+    torch.set_default_tensor_type('torch.FloatTensor')
+    
+def load_net(cache_path):
+    num_classes = len(VOC_CLASSES) + 1 # +1 background
+    net = build_ssd('test', 300, num_classes) # initialize SSD
+    net.load_state_dict(torch.load(cache_path))
+    net.eval()
+    return net
+
+
+class BasicDataset(Dataset):
+    def __init__(self, root, transform):
+        self.root = root
+        self.listdir = os.listdir(self.root)
+        #self.set_listdir = set(self.listdir)
+        self.transform = transform
+    def __len__(self):
+        return len(self.listdir)
+    def __getitem__(self, idx):
+        path = os.path.join(self.root, self.listdir[idx])
+        img = cv2.imread(path, cv2.IMREAD_COLOR)
+        x = torch.from_numpy(self.transform(img)[0]).permute(2, 0, 1)
+        scale = torch.Tensor([img.shape[1], img.shape[0],
+                     img.shape[1], img.shape[0]])
+
+        return x, scale, self.listdir[idx]
+    def diff(self, predict_dir, verbose=False):
+        check_set = set([os.path.splitext(fname)[0] for fname in self.listdir])
+        exist_set = set([os.path.splitext(fname)[0] for fname in os.listdir(predict_dir)])
+        self.listdir = ['{}.jpg'.format(name) for name in check_set - exist_set]
+        if verbose:
+            print('check_set:{} exist_set:{} resid:{} remove:{}'.format(
+                    len(check_set),len(exist_set),len(self.listdir),len(check_set)-len(self.listdir)))
+    
+def batch_predict(net, dataloader, threshold = 0.6, predict_dir='predict_cache', 
+                  verbose=False, force=False):
+    os.makedirs(predict_dir, exist_ok=True)
+    
+    if not force:
+        dataloader.dataset.diff(predict_dir, verbose=verbose)
+    
+    if verbose:
+        batch_processed = 0
+    
+    for x_batch, scale_batch, name_list in dataloader:
+        if use_cuda:
+            x_batch = x_batch.cuda()
+        
+        with torch.no_grad():
+            y_batch = net(x_batch)
+        detections = y_batch.data
+        
+        for batch_idx in range(y_batch.size(0)):
+            scale = scale_batch[batch_idx]
+            name = name_list[batch_idx]
+            pname, ext = os.path.splitext(name)
+            
+            for i in range(detections.size(1)):
+                j = 0
+                det_list = []
+                while detections[batch_idx, i, j, 0] >= threshold:
+                    score = detections[batch_idx, i, j, 0]
+                    label_name = labelmap[i-1]
+                    pt = (detections[batch_idx, i, j, 1:]*scale).cpu().numpy()
+                    
+                    det = {'score': score.cpu(),
+                                'label_name': label_name,
+                                'pt': pt}
+                    det_list.append(det)
+                    
+                    
+                    #coords = (pt[0], pt[1], pt[2], pt[3])
+                    '''
+                    cv2.rectangle(img, (pt[0], pt[1]), (pt[2], pt[3]), (255, 0, 0), 3)
+                    text = label_name + ':' + '{:.4f}'.format(score.item())
+                    img = cv2.putText(img, text, (pt[0], pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                      (255, 255, 255), 2)
+                    pred_num += 1
+                    '''
+                    j += 1
+                    
+                torch.save(det_list, '{}/{}.cache'.format(predict_dir, pname))
+        if verbose:
+            batch_processed += 1
+            print('Processing batch {}/{}'.format(batch_processed, len(dataloader)))
+            pass
+
+def draw_predict(predict_dir, img_dir, output_dir, verbose=False):
+    os.makedirs(output_dir, exist_ok=True)
+    
+    for predict_name in os.listdir(predict_dir):
+        name,ext = os.path.splitext(predict_name)
+        img_name = '{}.{}'.format(name, 'jpg')
+        
+        predict_path = os.path.join(predict_dir, predict_name)
+        img_path = os.path.join(img_dir, img_name)
+        target_path = os.path.join(output_dir, img_name)
+        
+        det_list = torch.load(predict_path)
+        img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        for det in det_list:
+            score, label_name, pt = det['score'], det['label_name'], det['pt']
+            if verbose:
+                print(det)
+            
+            cv2.rectangle(img, (pt[0], pt[1]), (pt[2], pt[3]), (255, 0, 0), 3)
+            text = label_name + ':' + '{:.4f}'.format(score.item())
+            img = cv2.putText(img, text, (pt[0], pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                              (255, 255, 255), 2)
+            
+        cv2.imwrite(target_path, img)
+        if verbose:
+            print('{}+{}=>{}'.format(predict_path,img_path,target_path))
+
+def box_distance(box1, box2):
+    box1_center = np.array([box1['pt'][::2].mean(),box1['pt'][1::2].mean()])
+    box2_center = np.array([box2['pt'][::2].mean(),box2['pt'][1::2].mean()])
+    #print(box1_center)
+    return np.linalg.norm(box1_center - box2_center)
+         
+def collect_predict(cache_root, pixel_threshold = 60, verbose=False,
+                    K_size = 60, K_delta_size=40):
+    predict_cache = []
+    predict_cache_map = {}
+    #for i in range(1,3001):
+    for name in os.listdir(cache_root):
+        det_list = torch.load('{}/{}'.format(cache_root, name))
+        predict_cache.append(det_list)
+        predict_cache_map[name] = det_list
+    
+    chain_list = []
+    
+    for i,pred in enumerate(predict_cache):
+        for box in pred:
+            if 'matched' in box:
+                continue
+            box['matched'] = True
+            box['head'] = True
+            chain = [box]
+            
+            box_head = box
+            for pred_test in predict_cache[i+1:]:
+                if len(pred_test) == 0:
+                    break
+                distance_list = []
+                for box_test in pred_test:
+                    if 'matched' not in box_test:
+                        distance = box_distance(box_head, box_test)
+                        if distance > pixel_threshold:
+                            continue
+                        distance_list.append(distance)
+                if len(distance_list) == 0:
+                    break
+                idx = np.argmin(distance_list)
+                pred_test[idx]['matched'] = True
+                box_head = pred_test[idx]
+                chain.append(box_head)
+            
+            chain_list.append(chain)
+            
+    if verbose:                    
+        print('{} chain detected'.format(len(chain_list)))
+    
+    K = np.ones(K_size)/K_size
+    K_delta = np.ones(K_delta_size)/K_delta_size
+    
+    for chain in chain_list:
+        pt_conv_list = []
+        for pt_idx in range(4):
+            pt_conv = convolve([box['pt'][pt_idx] for box in chain], K, mode ='nearest')
+            pt_conv_list.append(pt_conv)
+        for j,smoothed_pt in enumerate(np.array(pt_conv_list).T):
+            chain[j]['pt_smoothed'] = smoothed_pt
+            if j>0:
+                chain[j-1]['pt_smoothed_next'] = smoothed_pt
+                chain[j-1]['pt_next'] = chain[j]['pt']
+    
+    # compute normed delta and smooth it            
+    
+    for chain in chain_list:
+        for box in chain:
+            if 'pt_smoothed_next' in box:
+                pt_smoothed_next_center = np.array([box['pt_smoothed_next'][::2].mean(), box['pt_smoothed_next'][1::2].mean()])
+                pt_smoothed_cemter = np.array([box['pt_smoothed'][::2].mean(), box['pt_smoothed'][1::2].mean()])                
+                box['delta'] = pt_smoothed_next_center - pt_smoothed_cemter
+    
+    for chain in chain_list:
+        delta_conv_list = []
+        for delta_idx in range(2):
+            delta_conv = convolve([box['delta'][delta_idx] for box in chain if 'delta' in box], K_delta, mode ='nearest')
+            delta_conv_list.append(delta_conv)
+        for i, delta_smoothed in enumerate(np.array(delta_conv_list).T):
+            chain[i]['delta_smoothed'] = delta_smoothed
+
+    return {'predict_cache':predict_cache, 
+            'predict_cache_map':predict_cache_map, 
+            'chain_list':chain_list}
+        
+def test_arrow(cache_name, img_path, predict_cache_map, cvt=False, 
+               delta_smoothed = True):
+    #cache_name = '{}.cache'.format(name)
+    #img_path = 'images/{}.jpg'.format(name)
+    
+    vis = cv2.imread(img_path)
+    if cvt:
+        vis = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
+    
+    #pt = predict_cache_map[cache_name][0]['pt']
+    
+    if len(predict_cache_map[cache_name]) == 0:
+        return vis
+    
+    for i in range(len(predict_cache_map[cache_name])):
+        pt = predict_cache_map[cache_name][i]['pt_smoothed']
+        
+        # draw rectangle
+        cv2.rectangle(vis, (pt[0], pt[1]), (pt[2], pt[3]), (255, 0, 0), 3)
+        
+        # draw arrow
+        pt_center = np.array([(pt[0]+pt[2])/2, (pt[1]+pt[3])/2])
+        if delta_smoothed:
+            if 'delta_smoothed' not in predict_cache_map[cache_name][i]:
+                continue
+            delta = predict_cache_map[cache_name][i]['delta_smoothed']
+        else:
+            if 'pt_smoothed_next' not in predict_cache_map[cache_name][i]:
+                continue
+            pt_smoothed_next = predict_cache_map[cache_name][i]['pt_smoothed_next']
+            pt_smoothed_next_center = np.array([(pt_smoothed_next[0]+pt_smoothed_next[2])/2, (pt_smoothed_next[1]+pt_smoothed_next[3])/2])
+            delta = pt_smoothed_next_center - pt_center
+            
+        delta /= np.linalg.norm(delta) / 200
+
+        pt_smoothed_next_center_adjusted = pt_center + delta
+        cv2.arrowedLine(vis, tuple(pt_center.astype(int)), tuple(pt_smoothed_next_center_adjusted.astype(int)), (0, 0, 255), 10)
+    
+    return vis
+        
+def cache_to_arrowed(cache_root, img_root, target_root, pixel_threshold = 60, verbose=False,
+                    K_size = 60, K_delta_size=40, cvt=False, 
+               delta_smoothed = True):
+    collected = collect_predict(cache_root, pixel_threshold = pixel_threshold, verbose=verbose,
+                    K_size = K_size, K_delta_size=K_delta_size)
+    predict_cache_map = collected['predict_cache_map']
+    
+    for i,cache_name in enumerate(predict_cache_map):
+        name, ext = os.path.splitext(cache_name)
+        img_path = '{}/{}.jpg'.format(img_root, name)
+        img_processed = test_arrow(cache_name, img_path, predict_cache_map, cvt=cvt, 
+               delta_smoothed = delta_smoothed)
+        target_path = '{}/{}.jpg'.format(target_root, name)
+        cv2.imwrite(target_path, img_processed)
+        if verbose:
+            if i % 100 == 0:
+                print('write {}/{}'.format(i,len(predict_cache_map)))
+
+if __name__ == '__main__':
+    net = load_net('weights/ssd300_COCO_6000.pth')
+    base_transform = BaseTransform(net.size, (104, 117, 123))
+    
+    dataset = BasicDataset('test_data', base_transform)
+    dataloader = DataLoader(dataset, batch_size, shuffle = False)
+    
+    dataset_video = BasicDataset('video_data', base_transform)
+    dataloader_video = DataLoader(dataset_video, batch_size, shuffle = False)
+    
+    dataset_images = BasicDataset('images', base_transform)
+    dataloader_images = DataLoader(dataset_images, batch_size, shuffle = False)
+
+    
+    #dataset_video = BasicDataset('video_data', base_transform)
+    #dataloader_video2 = DataLoader(dataset_video, batch_size=30, shuffle = False, num_workers=2)
+    
+    #batch_predict(net, dataloader_images, verbose=True)
+    #draw_predict('predict_cache', 'test_data', 'test_data_output2', verbose=True)
+    '''
+    For 216 images:
+        batch_size = 30 -> 52.1s 
+        batch_size = 5 -> 56.5s 
+        batch_size = 1 -> 56s 
+        batch_size = 30 num_workers=2 -> \infty (Is there a BUG??? https://github.com/pytorch/pytorch/issues/12831)
+    
+    it seems like the batch_size is useless
+    '''
+    
+    '''
+    t1 = time.time()
+    batch_predict(net, dataloader_video2)
+    t2 = time.time()
+    print(t2-t1)
+    '''    

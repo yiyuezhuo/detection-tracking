@@ -1,0 +1,6 @@
+*.jpg
+*.cache
+*.mp4
+*.pyc
+.ipynb_checkpoints/
+*.pth
