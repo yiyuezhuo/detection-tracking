@@ -52,4 +52,9 @@ def generate_video_from_dir(dir_path, frame_rate=24, dir_list = None):
     #os.system(command)
     # For some reason, calling it directly doest't work.
     
-#\
+def generate_video_from_dir_ffmpeg(dir_path, frame_rate=24):
+    import ffmpeg
+    
+    stream = ffmpeg.input(dir_path+'/*.jpg', pattern_type='glob', framerate=frame_rate)
+    stream = stream.output('movie.mp4')
+    ffmpeg.run(stream)

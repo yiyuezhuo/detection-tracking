@@ -8,16 +8,17 @@ Created on Fri May 24 13:11:44 2019
 import os
 import torch
 import cv2
-import time
+#import time
 import numpy as np
 from scipy.ndimage import convolve
 
-from torch.utils.data import Dataset, DataLoader
+#from torch.utils.data import Dataset, DataLoader
 
 
-from data import BaseTransform
-from ssd import build_ssd
+#from data import BaseTransform
+#from ssd import build_ssd
 
+'''
 from data import VOC_CLASSES
 labelmap = VOC_CLASSES
 
@@ -28,7 +29,9 @@ if use_cuda and torch.cuda.is_available():
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 else:
     torch.set_default_tensor_type('torch.FloatTensor')
-    
+'''
+
+'''
 def load_net(cache_path):
     num_classes = len(VOC_CLASSES) + 1 # +1 background
     net = build_ssd('test', 300, num_classes) # initialize SSD
@@ -99,13 +102,7 @@ def batch_predict(net, dataloader, threshold = 0.6, predict_dir='predict_cache',
                     
                     
                     #coords = (pt[0], pt[1], pt[2], pt[3])
-                    '''
-                    cv2.rectangle(img, (pt[0], pt[1]), (pt[2], pt[3]), (255, 0, 0), 3)
-                    text = label_name + ':' + '{:.4f}'.format(score.item())
-                    img = cv2.putText(img, text, (pt[0], pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                      (255, 255, 255), 2)
-                    pred_num += 1
-                    '''
+
                     j += 1
                     
                 torch.save(det_list, '{}/{}.cache'.format(predict_dir, pname))
@@ -113,6 +110,7 @@ def batch_predict(net, dataloader, threshold = 0.6, predict_dir='predict_cache',
             batch_processed += 1
             print('Processing batch {}/{}'.format(batch_processed, len(dataloader)))
             pass
+'''
 
 def draw_predict_single(predict_name, predict_dir, img_dir, verbose=False):
     name,ext = os.path.splitext(predict_name)
@@ -176,6 +174,13 @@ def load_predict(cache_root):
     
 class ChainingFail(Exception):
     pass
+
+class DummyPointer:
+    '''
+    Helper to prevent render recursive content in Jupyter notebook
+    '''
+    def __init__(self, value):
+        self.value = value
     
 def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
                     K_size = 60, K_delta_size=40, chain_smoother = None,
@@ -198,6 +203,7 @@ def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
                 continue
             box['matched'] = True
             box['head'] = True
+            box['frame'] = i
             chain = [box]
             
             '''
@@ -208,7 +214,7 @@ def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
             
             box_head = box
             jump_count = 0
-            for pred_test in predict_cache[i+1:]:
+            for d,pred_test in enumerate(predict_cache[i+1:]):
                 try:
                     if len(pred_test) == 0:
                         #break
@@ -226,8 +232,11 @@ def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
                         #break
                         raise ChainingFail
                     idx = np.argmin(distance_list)
+                    
                     alt_list[idx]['matched'] = True
+                    alt_list[idx]['frame'] = i+d+1
                     box_head = alt_list[idx]
+                    
                     chain.append(box_head)
                     
                     jump_count = 0
@@ -281,6 +290,12 @@ def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
             delta_conv_list.append(delta_conv)
         for i, delta_smoothed in enumerate(np.array(delta_conv_list).T):
             chain[i]['delta_smoothed'] = delta_smoothed
+            
+    # add back-reference to chain from element(box)
+    
+    for chain in chain_list:
+        for box in chain:
+            box['chain'] = DummyPointer(chain)
 
     return {'predict_cache': predict_cache, 'chain_list':chain_list}
 
@@ -339,14 +354,72 @@ def test_arrow(cache_name, img_path, predict_cache_map, cvt=False,
         vis = cv2.resize(vis, (vis.shape[1]//resize_factor, vis.shape[0]//resize_factor))
     
     return vis
+
+def interpolation_box(box_begin, box_end):
+    '''
+    The function define `interpolation`, `pt_smoothed`, `delta_smoothed`, `pt_smoothed_next`, `frame`
+    but not `chain` etc.
+    '''
+    new_box_list = []
+    for frame in range(box_begin['frame']+1, box_end['frame']):
+        p = (frame - box_begin['frame'])/(box_end['frame'] - box_begin['frame'])
+        box = {'interpolation': True, 'frame': frame}
+        box['pt_smoothed'] =  box_begin['pt_smoothed'] * (1-p) +  box_end['pt_smoothed'] * p
+        if 'delta_smoothed' in box_begin and 'delta_smoothed' in box_end:
+            box['delta_smoothed'] = box_begin['delta_smoothed'] * (1-p) +  box_end['delta_smoothed'] * p
+        new_box_list.append(box)
+    box_list = [box_begin] + new_box_list + [box_end]
+    for box,box_next in zip(box_list[:-1],box_list[1:]):
+        box['pt_smoothed_next'] = box_next['pt_smoothed']
+    
+    return new_box_list
+        
+def interpolation_chain(chain):
+    new_chain = [chain[0]]
+    chain[0]['chain'] = DummyPointer(new_chain)
+    for i,(box, box_next) in enumerate(zip(chain[:-1],chain[1:])):
+        if box['frame']+1 != box_next['frame']:
+            for new_box in interpolation_box(box, box_next):
+                new_chain.append(new_box)
+                new_box['chain'] = DummyPointer(new_chain)
+        new_chain.append(box_next)
+        box_next['chain'] = DummyPointer(new_chain)
+    return new_chain
+
+def interpolation_chain_list(chain_list):
+    new_chain_list = []
+    for chain in chain_list:
+        new_chain_list.append(interpolation_chain(chain))
+    
+    return new_chain_list
+
+def interpolation_collected(collected):
+    new_chain_list = interpolation_chain_list(collected['chain_list'])
+    new_predict_cache = [[] for _ in range(len(collected['predict_cache']))]
+    for chain in new_chain_list:
+        # Note that every boxes occur and only occur once in a chain
+        for box in chain:
+            new_predict_cache[box['frame']].append(box)
+    new_predict_cache_map = {}
+    for key,_id in collected['key2id'].items():
+        new_predict_cache_map[key] = new_predict_cache[_id]
+    return {'predict_cache':new_predict_cache,
+            'predict_cache_map':new_predict_cache_map,
+            'id2key':collected['id2key'].copy(),
+            'key2id':collected['key2id'].copy(), 
+            'chain_list': new_chain_list}
         
 def cache_to_arrowed(cache_root, img_root, target_root, pixel_threshold = 60, verbose=False,
                     K_size = 60, K_delta_size=40, cvt=False, 
                delta_smoothed = True, resize_factor=None, chain_smoother = None,
-               jump_tol = 0):
+               jump_tol = 0, interpolation=False):
+    
     collected = collect_predict(cache_root, pixel_threshold = pixel_threshold, verbose=verbose,
                     K_size = K_size, K_delta_size=K_delta_size, chain_smoother = chain_smoother,
                     jump_tol = jump_tol)
+    if interpolation:
+        collected = interpolation_collected(collected)
+        
     predict_cache_map = collected['predict_cache_map']
     
     for i,cache_name in enumerate(predict_cache_map):
@@ -367,6 +440,7 @@ def adaptive_chain_smoother(arr, F=3):
 
 
 if __name__ == '__main__':
+    '''
     net = load_net('weights/ssd300_COCO_6000.pth')
     base_transform = BaseTransform(net.size, (104, 117, 123))
     
@@ -378,6 +452,7 @@ if __name__ == '__main__':
     
     dataset_images = BasicDataset('images', base_transform)
     dataloader_images = DataLoader(dataset_images, batch_size, shuffle = False)
+    '''
 
     
     #dataset_video = BasicDataset('video_data', base_transform)
@@ -385,6 +460,14 @@ if __name__ == '__main__':
     
     #batch_predict(net, dataloader_images, verbose=True)
     #draw_predict('predict_cache', 'test_data', 'test_data_output2', verbose=True)
+    
+    #cache_to_arrowed('output074_cache', 'output074_frames', 'output074_processed_int', verbose=True, resize_factor=4, chain_smoother=adaptive_chain_smoother,jump_tol=10,interpolation=True)
+    
+    '''
+    dataset_images = BasicDataset('output087_frames', base_transform)
+    dataloader_images = DataLoader(dataset_images, batch_size, shuffle = False)
+    batch_predict(net, dataloader_images, verbose=True, predict_dir='output087_cache')
+    '''
     '''
     For 216 images:
         batch_size = 30 -> 52.1s 
