@@ -21,7 +21,7 @@ def rename_dir(dir_path, dir_list = None):
 
 def generate_video_from_dir(dir_path, frame_rate=24, dir_list = None):
     '''
-    Side effect: change name of images dir_path
+    Warning: Side effect - change name of images dir_path
     
     dir_list: prevent wrong order of such fname structure: 1.jpg 2.jpg ... 10.jpg
     '''

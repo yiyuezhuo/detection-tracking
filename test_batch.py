@@ -149,31 +149,6 @@ def draw_predict(predict_dir, img_dir, output_dir, verbose=False):
         if verbose:
             print('{}=>{}'.format(name, target_path))
     
-    '''
-    for predict_name in os.listdir(predict_dir):
-        name,ext = os.path.splitext(predict_name)
-        img_name = '{}.{}'.format(name, 'jpg')
-        
-        predict_path = os.path.join(predict_dir, predict_name)
-        img_path = os.path.join(img_dir, img_name)
-        target_path = os.path.join(output_dir, img_name)
-        
-        det_list = torch.load(predict_path)
-        img = cv2.imread(img_path, cv2.IMREAD_COLOR)
-        for det in det_list:
-            score, label_name, pt = det['score'], det['label_name'], det['pt']
-            if verbose:
-                print(det)
-            
-            cv2.rectangle(img, (pt[0], pt[1]), (pt[2], pt[3]), (255, 0, 0), 3)
-            text = label_name + ':' + '{:.4f}'.format(score.item())
-            img = cv2.putText(img, text, (pt[0], pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                              (255, 255, 255), 2)
-            
-        cv2.imwrite(target_path, img)
-        if verbose:
-            print('{}+{}=>{}'.format(predict_path,img_path,target_path))
-    '''
 
 def box_distance(box1, box2, key='pt'):
     box1_center = np.array([box1[key][::2].mean(),box1[key][1::2].mean()])
@@ -199,8 +174,12 @@ def load_predict(cache_root):
             'id2key': id2key,
             'key2id': key2id}
     
+class ChainingFail(Exception):
+    pass
+    
 def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
-                    K_size = 60, K_delta_size=40):
+                    K_size = 60, K_delta_size=40, chain_smoother = None,
+                    jump_tol = 0):
     #predict_cache = loaded['predict_cache']
     #predict_cache_map = loaded['predict_cache_map']
     #id2key = loaded['id2key']
@@ -228,24 +207,35 @@ def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
             '''
             
             box_head = box
+            jump_count = 0
             for pred_test in predict_cache[i+1:]:
-                if len(pred_test) == 0:
-                    break
-                distance_list = []
-                alt_list = []
-                for box_test in pred_test:
-                    if 'matched' not in box_test:
-                        distance = box_distance(box_head, box_test)
-                        if distance > pixel_threshold:
-                            continue
-                        distance_list.append(distance)
-                        alt_list.append(box_test)
-                if len(distance_list) == 0:
-                    break
-                idx = np.argmin(distance_list)
-                alt_list[idx]['matched'] = True
-                box_head = alt_list[idx]
-                chain.append(box_head)
+                try:
+                    if len(pred_test) == 0:
+                        #break
+                        raise ChainingFail
+                    distance_list = []
+                    alt_list = []
+                    for box_test in pred_test:
+                        if 'matched' not in box_test:
+                            distance = box_distance(box_head, box_test)
+                            if distance > pixel_threshold:
+                                continue
+                            distance_list.append(distance)
+                            alt_list.append(box_test)
+                    if len(distance_list) == 0:
+                        #break
+                        raise ChainingFail
+                    idx = np.argmin(distance_list)
+                    alt_list[idx]['matched'] = True
+                    box_head = alt_list[idx]
+                    chain.append(box_head)
+                    
+                    jump_count = 0
+                except ChainingFail:
+                    if jump_count >= jump_tol:
+                        jump_count = 0
+                        break
+                    jump_count += 1
                 
                 '''
                 if id(box_head) in debug_set:
@@ -264,7 +254,10 @@ def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
     for chain in chain_list:
         pt_conv_list = []
         for pt_idx in range(4):
-            pt_conv = convolve([box['pt'][pt_idx] for box in chain], K, mode ='nearest')
+            if chain_smoother is None:
+                pt_conv = convolve([box['pt'][pt_idx] for box in chain], K, mode ='nearest')
+            else:
+                pt_conv = chain_smoother(np.array([box['pt'][pt_idx] for box in chain]))
             pt_conv_list.append(pt_conv)
         for j,smoothed_pt in enumerate(np.array(pt_conv_list).T):
             chain[j]['pt_smoothed'] = smoothed_pt
@@ -292,102 +285,20 @@ def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
     return {'predict_cache': predict_cache, 'chain_list':chain_list}
 
 def collect_predict(cache_root, pixel_threshold = 60, verbose=False,
-                    K_size = 60, K_delta_size=40):
+                    K_size = 60, K_delta_size=40, chain_smoother = None,
+                    jump_tol = 0):
     loaded = load_predict(cache_root)
-    '''
-    loaded = smooth_predict(loaded, pixel_threshold = pixel_threshold, verbose=verbose,
-                    K_size = K_size, K_delta_size=K_delta_size)
-    '''
+
     smoothed = smooth_predict(loaded['predict_cache'], pixel_threshold = pixel_threshold, verbose=verbose,
-                    K_size = K_size, K_delta_size=K_delta_size)
+                    K_size = K_size, K_delta_size=K_delta_size, chain_smoother = chain_smoother,
+                    jump_tol = jump_tol)
     loaded['chain_list'] = smoothed['chain_list']
+    
     return loaded
-    '''
-    predict_cache = []
-    predict_cache_map = {}
-    id2key = {}
-    key2id = {}
-    
-    for i,name in enumerate(os.listdir(cache_root)):
-        det_list = torch.load('{}/{}'.format(cache_root, name))
-        predict_cache.append(det_list)
-        id2key[i] = name
-        key2id[name] = i
-        predict_cache_map[name] = det_list
-    
-    chain_list = []
-    
-    for i,pred in enumerate(predict_cache):
-        for box in pred:
-            if 'matched' in box:
-                continue
-            box['matched'] = True
-            box['head'] = True
-            chain = [box]
-            
-            box_head = box
-            for pred_test in predict_cache[i+1:]:
-                if len(pred_test) == 0:
-                    break
-                distance_list = []
-                for box_test in pred_test:
-                    if 'matched' not in box_test:
-                        distance = box_distance(box_head, box_test)
-                        if distance > pixel_threshold:
-                            continue
-                        distance_list.append(distance)
-                if len(distance_list) == 0:
-                    break
-                idx = np.argmin(distance_list)
-                pred_test[idx]['matched'] = True
-                box_head = pred_test[idx]
-                chain.append(box_head)
-            
-            chain_list.append(chain)
-            
-    if verbose:                    
-        print('{} chain detected'.format(len(chain_list)))
-    
-    K = np.ones(K_size)/K_size
-    K_delta = np.ones(K_delta_size)/K_delta_size
-    
-    for chain in chain_list:
-        pt_conv_list = []
-        for pt_idx in range(4):
-            pt_conv = convolve([box['pt'][pt_idx] for box in chain], K, mode ='nearest')
-            pt_conv_list.append(pt_conv)
-        for j,smoothed_pt in enumerate(np.array(pt_conv_list).T):
-            chain[j]['pt_smoothed'] = smoothed_pt
-            if j>0:
-                chain[j-1]['pt_smoothed_next'] = smoothed_pt
-                chain[j-1]['pt_next'] = chain[j]['pt']
-    
-    # compute normed delta and smooth it            
-    
-    for chain in chain_list:
-        for box in chain:
-            if 'pt_smoothed_next' in box:
-                pt_smoothed_next_center = np.array([box['pt_smoothed_next'][::2].mean(), box['pt_smoothed_next'][1::2].mean()])
-                pt_smoothed_cemter = np.array([box['pt_smoothed'][::2].mean(), box['pt_smoothed'][1::2].mean()])                
-                box['delta'] = pt_smoothed_next_center - pt_smoothed_cemter
-    
-    for chain in chain_list:
-        delta_conv_list = []
-        for delta_idx in range(2):
-            delta_conv = convolve([box['delta'][delta_idx] for box in chain if 'delta' in box], K_delta, mode ='nearest')
-            delta_conv_list.append(delta_conv)
-        for i, delta_smoothed in enumerate(np.array(delta_conv_list).T):
-            chain[i]['delta_smoothed'] = delta_smoothed
-    
-    return {'predict_cache':predict_cache, 
-            'predict_cache_map':predict_cache_map, 
-            'chain_list':chain_list,
-            'id2key':id2key,
-            'key2id':key2id}
-    '''
+
         
 def test_arrow(cache_name, img_path, predict_cache_map, cvt=False, 
-               delta_smoothed = True):
+               delta_smoothed = True, resize_factor=None):
     #cache_name = '{}.cache'.format(name)
     #img_path = 'images/{}.jpg'.format(name)
     
@@ -424,25 +335,36 @@ def test_arrow(cache_name, img_path, predict_cache_map, cvt=False,
         pt_smoothed_next_center_adjusted = pt_center + delta
         cv2.arrowedLine(vis, tuple(pt_center.astype(int)), tuple(pt_smoothed_next_center_adjusted.astype(int)), (0, 0, 255), 10)
     
+    if resize_factor is not None:
+        vis = cv2.resize(vis, (vis.shape[1]//resize_factor, vis.shape[0]//resize_factor))
+    
     return vis
         
 def cache_to_arrowed(cache_root, img_root, target_root, pixel_threshold = 60, verbose=False,
                     K_size = 60, K_delta_size=40, cvt=False, 
-               delta_smoothed = True):
+               delta_smoothed = True, resize_factor=None, chain_smoother = None,
+               jump_tol = 0):
     collected = collect_predict(cache_root, pixel_threshold = pixel_threshold, verbose=verbose,
-                    K_size = K_size, K_delta_size=K_delta_size)
+                    K_size = K_size, K_delta_size=K_delta_size, chain_smoother = chain_smoother,
+                    jump_tol = jump_tol)
     predict_cache_map = collected['predict_cache_map']
     
     for i,cache_name in enumerate(predict_cache_map):
         name, ext = os.path.splitext(cache_name)
         img_path = '{}/{}.jpg'.format(img_root, name)
         img_processed = test_arrow(cache_name, img_path, predict_cache_map, cvt=cvt, 
-               delta_smoothed = delta_smoothed)
+               delta_smoothed = delta_smoothed, resize_factor=resize_factor)
         target_path = '{}/{}.jpg'.format(target_root, name)
         cv2.imwrite(target_path, img_processed)
         if verbose:
             if i % 100 == 0:
                 print('write {}/{}'.format(i,len(predict_cache_map)))
+                
+def adaptive_chain_smoother(arr, F=3):
+    n_K = max(len(arr) //F, 1)
+    K = np.ones(n_K)/n_K
+    return convolve(arr, K, mode ='nearest')
+
 
 if __name__ == '__main__':
     net = load_net('weights/ssd300_COCO_6000.pth')
