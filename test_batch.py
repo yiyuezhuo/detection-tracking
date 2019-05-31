@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 from scipy.ndimage import convolve
 
+from draw_utils import draw_chinese
+
 #from torch.utils.data import Dataset, DataLoader
 
 
@@ -336,6 +338,8 @@ def test_arrow(cache_name, img_path, predict_cache_map, cvt=False,
         cv2.rectangle(vis, (pt[0], pt[1]), (pt[2], pt[3]), (255, 0, 0), 3)
         
         # draw arrow
+        if 'static' in predict_cache_map[cache_name][i]:
+            continue
         pt_center = np.array([(pt[0]+pt[2])/2, (pt[1]+pt[3])/2])
         if delta_smoothed:
             if 'delta_smoothed' not in predict_cache_map[cache_name][i]:
@@ -357,6 +361,44 @@ def test_arrow(cache_name, img_path, predict_cache_map, cvt=False,
         vis = cv2.resize(vis, (vis.shape[1]//resize_factor, vis.shape[0]//resize_factor))
     
     return vis
+
+def draw_legend(img_processed, cache_name, predict_cache_map):
+    
+    
+    sorted_frame_box_list = sorted(predict_cache_map[cache_name], key=lambda box:box['chain_list_idx'])
+
+    row_height = 40
+    column_start = int(img_processed.shape[1]/4)
+    total = len(sorted_frame_box_list)
+
+    for idx,box in enumerate(sorted_frame_box_list):
+        lefttop = box['pt_smoothed'][:2]
+        org = (int(lefttop[0]-25), int(lefttop[1]))
+        text = str(idx+1)
+        cv2.putText(img_processed, text, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 23, 0), 4, 8)
+
+        metre_per_pixel = 100 / img_processed.shape[1]
+        metre_per_frame = box['right_speed'] * metre_per_pixel
+        meter_per_second = metre_per_frame * 24
+        km_per_hour = meter_per_second * 3600 / 1000
+
+        center = (int(box['pt_smoothed'][::2].mean()),int(box['pt_smoothed'][1::2].mean()))
+        width = int(box['pt_smoothed'][2] - box['pt_smoothed'][0])
+        height = int(box['pt_smoothed'][3] - box['pt_smoothed'][1])
+        if box['right_speed'] == 0.0:
+            direction = '无'
+        elif box['right_speed'] > 0.0:
+            direction = '右'
+        else:
+            direction = '左'
+        desc = '船只{}: 中心点坐标:({},{}) 长:({}) 宽:({}), 方向:({}) 速度:({}KM/H)'.format(idx+1, center[0], center[1],
+                    width, height, direction, int(round(abs(km_per_hour))))
+
+        org_desc = (column_start, img_processed.shape[0] - row_height*(total-idx))
+        #cv2.putText(img_processed, desc, org_desc, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 23, 0), 4, 8)
+        img_processed = draw_chinese(img_processed, desc, org_desc, fill = (255, 23, 0))
+        
+    return img_processed
 
 def interpolation_box(box_begin, box_end):
     '''
@@ -411,11 +453,73 @@ def interpolation_collected(collected):
             'id2key':collected['id2key'].copy(),
             'key2id':collected['key2id'].copy(), 
             'chain_list': new_chain_list}
+    
+def choose_chain_collected(collected, threshold):
+    new_chain_list = [chain for chain in collected['chain_list'] if len(chain) > threshold]
+    new_predict_cache = [[] for _ in range(len(collected['predict_cache']))]
+    for chain in new_chain_list:
+        # Note that every boxes occur and only occur once in a chain
+        for box in chain:
+            new_predict_cache[box['frame']].append(box)
+    new_predict_cache_map = {}
+    for key,_id in collected['key2id'].items():
+        new_predict_cache_map[key] = new_predict_cache[_id]
+    return {'predict_cache':new_predict_cache,
+            'predict_cache_map':new_predict_cache_map,
+            'id2key':collected['id2key'].copy(),
+            'key2id':collected['key2id'].copy(), 
+            'chain_list': new_chain_list}
+    
+def supplement_delta_smoothed(chain):
+    res_list = []
+    for box in chain[::-1]:
+        if 'delta_smoothed' not in box:
+            res_list.append(box)
+        else:
+            break
+    for _box in res_list:
+        _box['delta_smoothed'] = box['delta_smoothed']
+    
+def chain_desc(chain, moving_threshold=0.02):
+    
+    res_list = []
+    for box in chain + [None]: # None is the guard to activate following logic
+        #print(len(res_list),box['delta_smoothed'][0],abs(box['delta_smoothed'][0]) < moving_threshold)
+        if box is None or abs(box['delta_smoothed'][0]) < moving_threshold:
+            #print('enter',  box['delta_smoothed'][0], abs(box['delta_smoothed'][0]) < moving_threshold)
+            if len(res_list) != 0:
+                
+                arr = np.array([box['delta_smoothed'][0] for box in res_list])
+                speed = arr[np.argmax(np.abs(arr))]
+                for _box in res_list:
+                    _box['right_speed'] = speed
+                res_list = []
+        #print('middle', box['delta_smoothed'][0], abs(box['delta_smoothed'][0]) < moving_threshold)
+        if box is not None:
+            if abs(box['delta_smoothed'][0]) < moving_threshold:
+                #print('zeroed', box['delta_smoothed'][0],abs(box['delta_smoothed'][0]) < moving_threshold)
+                box['right_speed'] = 0.0
+                box['static'] = True
+            else:
+                #print('tracked', box['delta_smoothed'][0],abs(box['delta_smoothed'][0]) < moving_threshold)
+                res_list.append(box)
+        
+def chain_list_desc(chain_list, moving_threshold=0.02):
+    for chain in chain_list:
+        chain_desc(chain)
+    
+    for idx,chain in enumerate(chain_list):
+        for box in chain:
+            box['chain_list_idx'] = idx
+
+
         
 def cache_to_arrowed(cache_root, img_root, target_root, pixel_threshold = 60, verbose=False,
                     K_size = 60, K_delta_size=40, cvt=False, 
                delta_smoothed = True, resize_factor=None, chain_smoother = None,
-               jump_tol = 0, interpolation=False):
+               jump_tol = 0, interpolation=False, chain_length_threshold = 0,
+               legend=False):
+    os.makedirs(target_root, exist_ok = True)
     
     collected = collect_predict(cache_root, pixel_threshold = pixel_threshold, verbose=verbose,
                     K_size = K_size, K_delta_size=K_delta_size, chain_smoother = chain_smoother,
@@ -423,13 +527,25 @@ def cache_to_arrowed(cache_root, img_root, target_root, pixel_threshold = 60, ve
     if interpolation:
         collected = interpolation_collected(collected)
         
+    collected = choose_chain_collected(collected, chain_length_threshold)
+    
+    for chain in collected['chain_list']:
+        supplement_delta_smoothed(chain)
+    
+    chain_list_desc(collected['chain_list'])
+        
     predict_cache_map = collected['predict_cache_map']
     
     for i,cache_name in enumerate(predict_cache_map):
         name, ext = os.path.splitext(cache_name)
         img_path = '{}/{}.jpg'.format(img_root, name)
+        
         img_processed = test_arrow(cache_name, img_path, predict_cache_map, cvt=cvt, 
                delta_smoothed = delta_smoothed, resize_factor=resize_factor)
+        
+        if legend:
+            img_processed = draw_legend(img_processed, cache_name, predict_cache_map)
+        
         target_path = '{}/{}.jpg'.format(target_root, name)
         cv2.imwrite(target_path, img_processed)
         if verbose:
@@ -457,4 +573,15 @@ if __name__ == '__main__':
     cache_to_arrowed('output074_cache', 'output074_frames', 'output074_processed_int', 
                      verbose=True, resize_factor=4, chain_smoother=smoother,
                      jump_tol=10,interpolation=True)
+    
+    smoother = lambda arr: adaptive_chain_smoother(arr, F=6)
+    cache_to_arrowed('hiv00800_cache', r'E:\ship_detect_demo\hiv00800_frames', 'hiv00800_processed_int', 
+                     verbose=True, chain_smoother=smoother,
+                     jump_tol=60,pixel_threshold = 70,chain_length_threshold=100,interpolation=True)
+
+    smoother = lambda arr: adaptive_chain_smoother(arr, F=6)
+    cache_to_arrowed('hiv00800_cache', r'E:\ship_detect_demo\hiv00800_frames', 'hiv00800_processed_int', 
+                     verbose=True, chain_smoother=smoother,
+                     jump_tol=60,pixel_threshold = 70,chain_length_threshold=100,
+                     interpolation=True, legend=True)
     '''

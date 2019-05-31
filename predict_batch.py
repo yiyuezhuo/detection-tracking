@@ -140,7 +140,7 @@ if __name__ == '__main__':
     
     dataset_images = BasicDataset(r'E:\ship_detect_demo\hiv00200_frames', base_transform)
     dataloader_images = DataLoader(dataset_images, batch_size, shuffle = False)
-    batch_predict(net, dataloader_images, verbose=True, predict_dir='hiv00200_cache')    
+    batch_predict(net, dataloader_images, threshold=0.15, verbose=True, predict_dir='hiv00200_cache')    
     '''
     '''
     For 216 images:
