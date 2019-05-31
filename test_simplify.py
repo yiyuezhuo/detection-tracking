@@ -39,7 +39,7 @@ else:
 #base_transform = BaseTransform(net.size, (104, 117, 123))    
     
     
-def test_basic(net, img_path):
+def test_basic(net, img_path, threshold = 0.6):
     img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     transform = BaseTransform(net.size, (104, 117, 123))
     x = torch.from_numpy(transform(img)[0]).permute(2, 0, 1)
@@ -57,7 +57,7 @@ def test_basic(net, img_path):
     pred_num = 0
     for i in range(detections.size(1)):
         j = 0
-        while detections[0, i, j, 0] >= 0.6:
+        while detections[0, i, j, 0] >= threshold:
             score = detections[0, i, j, 0]
             label_name = labelmap[i-1]
             pt = (detections[0, i, j, 1:]*scale).cpu().numpy()

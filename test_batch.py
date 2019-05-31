@@ -299,10 +299,13 @@ def smooth_predict(predict_cache, pixel_threshold = 60, verbose=False,
 
     return {'predict_cache': predict_cache, 'chain_list':chain_list}
 
-def collect_predict(cache_root, pixel_threshold = 60, verbose=False,
+def collect_predict(cache_root_or_loaded, pixel_threshold = 60, verbose=False,
                     K_size = 60, K_delta_size=40, chain_smoother = None,
                     jump_tol = 0):
-    loaded = load_predict(cache_root)
+    if isinstance(cache_root_or_loaded, str):
+        loaded = load_predict(cache_root_or_loaded)
+    else:
+        loaded = cache_root_or_loaded
 
     smoothed = smooth_predict(loaded['predict_cache'], pixel_threshold = pixel_threshold, verbose=verbose,
                     K_size = K_size, K_delta_size=K_delta_size, chain_smoother = chain_smoother,
@@ -440,47 +443,18 @@ def adaptive_chain_smoother(arr, F=3):
 
 
 if __name__ == '__main__':
-    '''
-    net = load_net('weights/ssd300_COCO_6000.pth')
-    base_transform = BaseTransform(net.size, (104, 117, 123))
-    
-    dataset = BasicDataset('test_data', base_transform)
-    dataloader = DataLoader(dataset, batch_size, shuffle = False)
-    
-    dataset_video = BasicDataset('video_data', base_transform)
-    dataloader_video = DataLoader(dataset_video, batch_size, shuffle = False)
-    
-    dataset_images = BasicDataset('images', base_transform)
-    dataloader_images = DataLoader(dataset_images, batch_size, shuffle = False)
-    '''
 
-    
-    #dataset_video = BasicDataset('video_data', base_transform)
-    #dataloader_video2 = DataLoader(dataset_video, batch_size=30, shuffle = False, num_workers=2)
-    
-    #batch_predict(net, dataloader_images, verbose=True)
-    #draw_predict('predict_cache', 'test_data', 'test_data_output2', verbose=True)
-    
-    #cache_to_arrowed('output074_cache', 'output074_frames', 'output074_processed_int', verbose=True, resize_factor=4, chain_smoother=adaptive_chain_smoother,jump_tol=10,interpolation=True)
-    
     '''
-    dataset_images = BasicDataset('output087_frames', base_transform)
-    dataloader_images = DataLoader(dataset_images, batch_size, shuffle = False)
-    batch_predict(net, dataloader_images, verbose=True, predict_dir='output087_cache')
-    '''
-    '''
-    For 216 images:
-        batch_size = 30 -> 52.1s 
-        batch_size = 5 -> 56.5s 
-        batch_size = 1 -> 56s 
-        batch_size = 30 num_workers=2 -> \infty (Is there a BUG??? https://github.com/pytorch/pytorch/issues/12831)
+    dataset_video = BasicDataset('video_data', base_transform)
+    dataloader_video2 = DataLoader(dataset_video, batch_size=30, shuffle = False, num_workers=2)
     
-    it seems like the batch_size is useless
-    '''
+    batch_predict(net, dataloader_images, verbose=True)
+    draw_predict('predict_cache', 'test_data', 'test_data_output2', verbose=True)
     
+    cache_to_arrowed('output074_cache', 'output074_frames', 'output074_processed_int', verbose=True, resize_factor=4, chain_smoother=adaptive_chain_smoother,jump_tol=10,interpolation=True)
+    
+    smoother = lambda arr: adaptive_chain_smoother(arr, F=6)
+    cache_to_arrowed('output074_cache', 'output074_frames', 'output074_processed_int', 
+                     verbose=True, resize_factor=4, chain_smoother=smoother,
+                     jump_tol=10,interpolation=True)
     '''
-    t1 = time.time()
-    batch_predict(net, dataloader_video2)
-    t2 = time.time()
-    print(t2-t1)
-    '''    

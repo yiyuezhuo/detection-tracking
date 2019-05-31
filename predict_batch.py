@@ -29,9 +29,13 @@ if use_cuda and torch.cuda.is_available():
 else:
     torch.set_default_tensor_type('torch.FloatTensor')
     
-def load_net(cache_path):
+def load_net(cache_path, 
+             detect_conf_threshold = 0.01,
+             detect_nms_threshold = 0.45):
     num_classes = len(VOC_CLASSES) + 1 # +1 background
-    net = build_ssd('test', 300, num_classes) # initialize SSD
+    net = build_ssd('test', 300, num_classes, 
+                    detect_conf_threshold = detect_conf_threshold,
+                    detect_nms_threshold = detect_nms_threshold) # initialize SSD
     net.load_state_dict(torch.load(cache_path))
     net.eval()
     return net
@@ -97,15 +101,6 @@ def batch_predict(net, dataloader, threshold = 0.6, predict_dir='predict_cache',
                                 'pt': pt}
                     det_list.append(det)
                     
-                    
-                    #coords = (pt[0], pt[1], pt[2], pt[3])
-                    '''
-                    cv2.rectangle(img, (pt[0], pt[1]), (pt[2], pt[3]), (255, 0, 0), 3)
-                    text = label_name + ':' + '{:.4f}'.format(score.item())
-                    img = cv2.putText(img, text, (pt[0], pt[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                      (255, 255, 255), 2)
-                    pred_num += 1
-                    '''
                     j += 1
                     
                 torch.save(det_list, '{}/{}.cache'.format(predict_dir, pname))
@@ -116,8 +111,10 @@ def batch_predict(net, dataloader, threshold = 0.6, predict_dir='predict_cache',
 
 
 if __name__ == '__main__':
-    net = load_net('weights/ssd300_COCO_6000.pth')
+    '''
+    net = load_net('weights/ssd300_hor_2.pth')
     base_transform = BaseTransform(net.size, (104, 117, 123))
+    
     
     dataset = BasicDataset('test_data', base_transform)
     dataloader = DataLoader(dataset, batch_size, shuffle = False)
@@ -127,7 +124,7 @@ if __name__ == '__main__':
     
     dataset_images = BasicDataset('images', base_transform)
     dataloader_images = DataLoader(dataset_images, batch_size, shuffle = False)
-
+    '''
     
     #dataset_video = BasicDataset('video_data', base_transform)
     #dataloader_video2 = DataLoader(dataset_video, batch_size=30, shuffle = False, num_workers=2)
@@ -135,12 +132,15 @@ if __name__ == '__main__':
     #batch_predict(net, dataloader_images, verbose=True)
     #draw_predict('predict_cache', 'test_data', 'test_data_output2', verbose=True)
     
-    #cache_to_arrowed('output074_cache', 'output074_frames', 'output074_processed_int', verbose=True, resize_factor=4, chain_smoother=adaptive_chain_smoother,jump_tol=10,interpolation=True)
     
     '''
-    dataset_images = BasicDataset('output087_frames', base_transform)
+    # cache last command used
+    net = load_net('weights/ssd300_hor_2.pth', detect_nms_threshold=0.2)
+    base_transform = BaseTransform(net.size, (104, 117, 123))
+    
+    dataset_images = BasicDataset(r'E:\ship_detect_demo\hiv00200_frames', base_transform)
     dataloader_images = DataLoader(dataset_images, batch_size, shuffle = False)
-    batch_predict(net, dataloader_images, verbose=True, predict_dir='output087_cache')
+    batch_predict(net, dataloader_images, verbose=True, predict_dir='hiv00200_cache')    
     '''
     '''
     For 216 images:
