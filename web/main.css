@@ -1,0 +1,9 @@
+#frameViewer img{
+    width: auto; 
+    height: 100%;
+}
+
+.label{
+    display: flex;
+    flex-direction: column;
+}

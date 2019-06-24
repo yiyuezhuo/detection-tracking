@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Hello, World!</title>
+
+    <!-- Include eel.js - note this file doesn't exist in the 'web' directory -->
+    <script type="text/javascript" src="/eel.js"></script>
+    
+  </head>
+
+  <body>
+    <div id="panel">
+      Video:
+      <input type="file" name="file[]" accept="video/*" id="input_video">
+      Preprocess result:
+      <input type="file" id="input_preprocess">
+    </div>
+    <div id="viewer">
+      <div id="frameViewer">
+        <video height="400" controls id="video_tag">
+        <source src="" id="video_here">
+          Use chrome to show video.
+        </video>
+      </div>
+      <div id="labelViewer"></div>
+    </div>
+  </body>
+  <script type="text/javascript" src="main.js"></script>
+</html>
