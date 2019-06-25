@@ -22,7 +22,7 @@ from data import VOC_CLASSES
 labelmap = VOC_CLASSES
 
 use_cuda = True
-batch_size = 20 # 20 for two parallel process
+batch_size = 18 # 18 for two parallel process
 
 if use_cuda and torch.cuda.is_available():
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
