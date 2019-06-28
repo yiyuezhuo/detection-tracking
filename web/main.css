@@ -1,9 +1,19 @@
-#frameViewer img{
-    width: auto; 
-    height: 100%;
+
+
+label.header{
+    font-weight: bold;
+    color: black;
+    margin:4px;
 }
 
-.label{
-    display: flex;
-    flex-direction: column;
+label.attr{
+    font-weight: bold;
+    /*color: blue;*/
+    color: rgba(50,50,250,0.9);
+    margin:2px;
+}
+
+input.value{
+    width: 60px;
+    margin:2px;
 }

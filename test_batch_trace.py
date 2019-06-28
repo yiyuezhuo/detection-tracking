@@ -15,6 +15,8 @@ import json
 import os
 import numpy as np
 
+from collected_transformers import classify_transform
+
 def draw_chinese(mat, desc, org_desc, fill):
     command = ('draw_chinese', desc, org_desc, fill)
     mat.command_list.append(command)
@@ -96,6 +98,7 @@ def transform_trace(write_map):
             
         command_list = []
         legend_list = []
+        predict_list = []
         for command in write_value.command_list:
             if command[0] in {'rectangle','arrowedLine','putText'}:
                 command_list.append(clean(command))
@@ -109,11 +112,16 @@ def transform_trace(write_map):
                 direc = direc_map[desc_list[4].split(':')[1][1:-1]]
                 speed = desc_list[5].split(':')[1]
                 legend_list.append([idx, coord, width, height, direc, speed])
+            elif command[0] == 'predict':
+                box_idx = command[1]
+                box_predict = int(command[2]) # convert numpy.int64 to python int
+                predict_list.append((box_idx, box_predict)) # How merge it to legend is not clear
             else:
                 raise Exception("Unknown command {}".format(command[0]))
         frame = {'command_list': command_list,
                  'legend_list': legend_list,
-                 'frame_name': frame_name}
+                 'frame_name': frame_name,
+                 'predict_list': predict_list}
         root_map[root_name]['frames'][frame_name] = frame
     
     for root_name, root_value in root_map.items():
@@ -125,7 +133,11 @@ def transform_trace(write_map):
         root_value['frames'] = frame_list
     
     return root_map
-        
+
+def extra_painter(mat, box_list):
+    for idx,box in enumerate(box_list):
+        mat.command_list.append(('predict', idx, box['predict']))
+    return mat
 
 if __name__ == '__main__':
     '''
@@ -149,4 +161,30 @@ if __name__ == '__main__':
             print('write: {}'.format(target_path))
     
     #flush_trace()
+    '''
+    
+    '''
+    # Add predict
+    smoother = lambda arr: adaptive_chain_smoother(arr, F=6)
+    cache_to_arrowed('hiv00801_cache', r'E:\ship_detect_demo\hiv00801_frames', 'hiv00801_processed_int', 
+                     verbose=True, chain_smoother=smoother,
+                     jump_tol=120,pixel_threshold = 100,chain_length_threshold=200,
+                     interpolation=True, legend=True,
+                     extra_transformer=classify_transform, extra_painter = extra_painter)
+    
+    cache_to_arrowed('hiv00803_cache', r'E:\ship_detect_demo\hiv00803_frames', 'hiv00803_processed_int', 
+                     verbose=True, chain_smoother=smoother,
+                     jump_tol=60,chain_length_threshold=200,
+                     interpolation=True, legend=True,
+                     extra_transformer=classify_transform, extra_painter = extra_painter)
+    
+    trace = transform_trace(cv2_trace.write_map)
+    
+    for key, value in trace.items():
+        target_path = '{}.json'.format(key)
+        with open(target_path, 'w') as f:
+            json.dump(value, f)
+            print('write: {}'.format(target_path))
+
+    
     '''

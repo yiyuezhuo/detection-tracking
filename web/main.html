@@ -2,27 +2,46 @@
 <html>
   <head>
     <title>Hello, World!</title>
-
+    <meta charset="UTF-8">
     <!-- Include eel.js - note this file doesn't exist in the 'web' directory -->
     <script type="text/javascript" src="/eel.js"></script>
-    
+    <link rel="stylesheet" type="text/css" href="main.css"> 
   </head>
 
   <body>
     <div id="panel">
       Video:
-      <input type="file" name="file[]" accept="video/*" id="input_video">
+      <input type="file" name="file[]" accept="video/*,.mkv" id="input_video">
       Trace file:
       <input type="file" name="file[]" accept=".json" id="input_trace">
     </div>
-    <div id="viewer">
-      <div id="frameViewer">
+    <div id="viewer" style="display: flex">
+      <div id="frameViewer" style="position: relative">
         <video height="400" controls id="video_tag">
         <source src="" id="video_here">
           Use chrome to show video.
         </video>
+        <canvas id="curtain" style="position: absolute; left: 0px; top: 0px; pointer-events:none"></canvas>
       </div>
-      <div id="labelViewer"></div>
+      <div id="labelViewer" style="margin:10px">
+        <div>
+          <label class="header">船只1</label>
+          <label class="attr">长</label>
+          <input type='text' value="900" class="value">
+          <label class="attr">宽</label>
+          <input type="text" value="160" class="value">
+          <label class="attr">中心点</label>
+          <input type="text" value="140,480" class="value">
+          <label class="attr">方向</label>
+          <input type="text" value="右" class="value">
+          <label class="attr">速度</label>
+          <input type="text" value="8Km/h" class="value">
+          <label class="attr">载货</label>
+          <input type="text" value="否" class="value">
+          <label class="attr">危化</label>
+          <input type="text" value="否" class="value">
+        </div>
+      </div>
     </div>
   </body>
   <script type="text/javascript" src="main.js"></script>

@@ -518,7 +518,7 @@ def cache_to_arrowed(cache_root, img_root, target_root, pixel_threshold = 60, ve
                     K_size = 60, K_delta_size=40, cvt=False, 
                delta_smoothed = True, resize_factor=None, chain_smoother = None,
                jump_tol = 0, interpolation=False, chain_length_threshold = 0,
-               legend=False):
+               legend=False, extra_transformer = None, extra_painter = None):
     os.makedirs(target_root, exist_ok = True)
     
     collected = collect_predict(cache_root, pixel_threshold = pixel_threshold, verbose=verbose,
@@ -533,8 +533,15 @@ def cache_to_arrowed(cache_root, img_root, target_root, pixel_threshold = 60, ve
         supplement_delta_smoothed(chain)
     
     chain_list_desc(collected['chain_list'])
+    
+    if extra_transformer:
+        # introduce extra classification CNN to classify types of patch.
+        assert extra_painter is not None
+        collected = extra_transformer(collected, img_root)
+         
         
     predict_cache_map = collected['predict_cache_map']
+    
     
     for i,cache_name in enumerate(predict_cache_map):
         name, ext = os.path.splitext(cache_name)
@@ -545,6 +552,11 @@ def cache_to_arrowed(cache_root, img_root, target_root, pixel_threshold = 60, ve
         
         if legend:
             img_processed = draw_legend(img_processed, cache_name, predict_cache_map)
+            
+        if extra_painter:
+            # The extra_painter is the correspondense of extra_transformer
+            assert extra_transformer is not None
+            img_processed = extra_painter(img_processed, predict_cache_map[cache_name])
         
         target_path = '{}/{}.jpg'.format(target_root, name)
         cv2.imwrite(target_path, img_processed)
